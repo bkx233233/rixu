@@ -1,0 +1,20 @@
+import 'package:flutter/widgets.dart';
+import 'package:intl/date_symbol_data_local.dart' as date_data;
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'app.dart';
+import 'core/config/supabase_config.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await date_data.initializeDateFormatting('zh_CN');
+
+  if (SupabaseConfig.isConfigured) {
+    await Supabase.initialize(
+      url: SupabaseConfig.url,
+      anonKey: SupabaseConfig.apiKey,
+    );
+  }
+
+  runApp(const RixuApp());
+}
