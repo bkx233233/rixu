@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 日序
 
 日序是一款同时支持 Android 和网页使用的个人生活管理应用。它把每天的日程、任务完成情况、饮食、训练和体重记录放在同一个账号中，并在不同设备之间同步。饮食支持保存自己的常用食物，后续选择食物即可自动带入营养数据。
@@ -66,6 +65,3 @@ flutter analyze
 - 在 Supabase SQL Editor 执行 `supabase/migrations/202608020003_food_items.sql` 后，再使用常用食物功能。
 - 如果训练状态显示“健身中”但动作仍保存失败，执行 `supabase/migrations/202608020004_fix_training_guard.sql` 覆盖旧的训练保护函数。
 - 完成真实云端同步、网页发布与 APK 签名打包验证。
-=======
-# rixu
->>>>>>> 8f7be4c4bd0b41bc3c2567484bbf63b7c63c0fb2
