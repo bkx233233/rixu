@@ -2,19 +2,33 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 String toChineseError(Object error, {String fallback = '操作失败，请稍后重试。'}) {
   final raw = error is AuthException ? error.message : error.toString();
+  final errorCode = error is AuthException ? error.code?.toLowerCase() : null;
   final message = raw.trim();
   final lower = message.toLowerCase();
 
   if (message.isEmpty) return fallback;
-  if (message.contains('邮箱或密码') ||
+  if (errorCode == 'invalid_credentials' ||
+      message.contains('邮箱或密码') ||
       lower.contains('invalid login credentials')) {
     return '邮箱或密码错误，请检查后重试。';
   }
-  if (lower.contains('email not confirmed')) return '邮箱尚未确认，请先完成邮箱确认。';
-  if (lower.contains('user already registered')) return '该邮箱已经注册，请直接登录。';
+  if (errorCode == 'email_not_confirmed' ||
+      lower.contains('email not confirmed')) {
+    return '邮箱尚未确认，请先完成邮箱确认。';
+  }
+  if (errorCode == 'user_already_exists' ||
+      lower.contains('user already registered')) {
+    return '该邮箱已经注册，请直接登录。';
+  }
   if (lower.contains('invalid email') || lower.contains('email address'))
     return '邮箱格式不正确。';
-  if (lower.contains('password')) return '密码不符合要求，请重新设置。';
+  if (errorCode == 'weak_password' ||
+      lower.contains('password should be at least') ||
+      lower.contains('password must be at least') ||
+      lower.contains('password is too short') ||
+      lower.contains('password is too weak')) {
+    return '密码不符合要求，请重新设置。';
+  }
   if (lower.contains('network') ||
       lower.contains('fetch') ||
       lower.contains('socket')) {

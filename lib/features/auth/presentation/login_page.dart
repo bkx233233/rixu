@@ -37,6 +37,10 @@ class _LoginPageState extends State<LoginPage> {
     if (!_formKey.currentState!.validate()) {
       return;
     }
+    final isRegistering = _isRegistering;
+    final failureTitle = isRegistering ? '注册失败' : '登录失败';
+    final failureFallback =
+        isRegistering ? '注册失败，请检查填写内容和网络后重试。' : '登录失败，请检查邮箱、密码和邮箱确认状态后重试。';
 
     setState(() {
       _isSubmitting = true;
@@ -47,7 +51,7 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      if (_isRegistering) {
+      if (isRegistering) {
         final response = await Supabase.instance.client.auth.signUp(
           email: _emailController.text.trim(),
           password: _passwordController.text,
@@ -75,7 +79,8 @@ class _LoginPageState extends State<LoginPage> {
       }
     } on AuthException catch (error) {
       if (mounted) {
-        _setError('操作失败', toChineseError(error, fallback: '登录或注册失败，请稍后重试。'));
+        _setError(
+            failureTitle, toChineseError(error, fallback: failureFallback));
       }
     } on TimeoutException {
       if (mounted) {
@@ -83,7 +88,8 @@ class _LoginPageState extends State<LoginPage> {
       }
     } catch (error) {
       if (mounted) {
-        _setError('操作失败', toChineseError(error, fallback: '登录或注册失败，请稍后重试。'));
+        _setError(
+            failureTitle, toChineseError(error, fallback: failureFallback));
       }
     } finally {
       if (mounted) {
