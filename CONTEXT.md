@@ -2,6 +2,10 @@
 
 正在从零建立“日序”第一版。目标是 Android 与网页共用 Flutter 代码，通过 Supabase 提供账号、云端数据库与多设备同步。
 
+# 最近进展
+
+- 已修复网页空白页：Android 闹铃与桌面小组件服务原先在 Web 环境读取原生平台信息，导致应用在 `runApp` 前终止。现在 Web 启动不会初始化闹铃，两个原生服务也会先跳过 Web。等待重新构建并发布验证。
+
 # 当前状态
 
 - 0.2 客户端功能已完成并通过 Web、Android release 构建；`202608020005_health_v2.sql` 尚待在 Supabase SQL Editor 执行。

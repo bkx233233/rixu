@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../../features/health/data/health_repository.dart';
@@ -11,8 +12,10 @@ class HomeWidgetService {
   static final instance = HomeWidgetService._();
   static const _channel = MethodChannel('rixu/home_widgets');
 
+  bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+
   Future<void> updateSchedule(List<ScheduleItem> items) async {
-    if (!Platform.isAndroid) return;
+    if (!_isAndroid) return;
     final completed = items.where((item) => item.isCompleted).length;
     ScheduleItem? next;
     for (final item in items) {
@@ -43,7 +46,7 @@ class HomeWidgetService {
   }
 
   Future<void> updateNutrition(HealthDayData data, NutritionTarget? target) async {
-    if (!Platform.isAndroid) return;
+    if (!_isAndroid) return;
     final intake = data.intake;
     final calorie = target == null ? '请在“我的”完善资料' : '已摄入 ${intake.calories.round()} / ${target.calories.round()} 千卡';
     await _channel.invokeMethod('updateNutrition', {

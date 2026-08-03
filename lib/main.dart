@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:intl/date_symbol_data_local.dart' as date_data;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -16,7 +17,9 @@ Future<void> main() async {
       anonKey: SupabaseConfig.apiKey,
     );
   }
-  await ScheduleNotificationService.instance.initialize();
+  if (!kIsWeb) {
+    await ScheduleNotificationService.instance.initialize();
+  }
 
   runApp(const RixuApp());
 }
