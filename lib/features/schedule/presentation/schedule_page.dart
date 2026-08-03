@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/feedback/user_message.dart';
+import '../../../core/notifications/schedule_notification_service.dart';
+import '../../../core/widgets/home_widget_service.dart';
 import '../data/schedule_repository.dart';
 
 class SchedulePage extends StatefulWidget {
@@ -28,6 +30,7 @@ class _SchedulePageState extends State<SchedulePage> {
     super.initState();
     _reload();
     _listenForChanges();
+    _syncAlarms();
   }
 
   void _listenForChanges() {
@@ -80,6 +83,16 @@ class _SchedulePageState extends State<SchedulePage> {
   void _reloadFromCloud() {
     if (mounted) {
       setState(_reload);
+      _syncAlarms();
+    }
+  }
+
+  Future<void> _syncAlarms() async {
+    try {
+      await ScheduleNotificationService.instance
+          .sync(await _repository.loadFutureReminders());
+    } catch (_) {
+      // 权限未允许时，新增日程会显示明确提示；后台同步不打断页面操作。
     }
   }
 
@@ -94,6 +107,11 @@ class _SchedulePageState extends State<SchedulePage> {
     _weekFuture = _loadWeek();
     _reviewFuture = _repository.loadDailyReview(_selectedDate);
     _goalsFuture = _repository.loadGoals(_goalType);
+    _itemsFuture.then((items) {
+      if (DateUtils.isSameDay(_selectedDate, DateTime.now())) {
+        return HomeWidgetService.instance.updateSchedule(items);
+      }
+    });
   }
 
   DateTime get _weekStart {
@@ -134,11 +152,16 @@ class _SchedulePageState extends State<SchedulePage> {
       return;
     }
     try {
-      await _repository.addTask(
+      final eventId = await _repository.addTask(
         title: result.title,
         note: result.note,
         startAt: result.startAt,
         endAt: result.endAt,
+      );
+      await ScheduleNotificationService.instance.schedule(
+        eventId: eventId,
+        title: result.title,
+        startAt: result.startAt,
       );
       if (mounted) {
         setState(_reload);
@@ -156,11 +179,32 @@ class _SchedulePageState extends State<SchedulePage> {
     try {
       await _repository.saveDailyReview(date: _selectedDate, summary: summary);
       if (mounted) {
+        setState(_reload);
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('每日总结已保存。')));
       }
     } catch (error) {
       if (mounted) _showError(error);
+    }
+  }
+
+  Future<bool> _deleteReview() async {
+    final confirmed = await _confirmDelete(
+      title: '删除每日总结',
+      content: '确认删除当天的每日总结？此操作无法撤销。',
+    );
+    if (!confirmed) return false;
+    try {
+      await _repository.deleteDailyReview(_selectedDate);
+      if (mounted) {
+        setState(_reload);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('每日总结已删除。')));
+      }
+      return true;
+    } catch (error) {
+      if (mounted) _showError(error);
+      return false;
     }
   }
 
@@ -217,7 +261,8 @@ class _SchedulePageState extends State<SchedulePage> {
     return FutureBuilder<List<ScheduleItem>>(
       future: _itemsFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
@@ -228,6 +273,11 @@ class _SchedulePageState extends State<SchedulePage> {
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           children: [
+            if (snapshot.connectionState == ConnectionState.waiting)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: LinearProgressIndicator(),
+              ),
             if (items.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 28),
@@ -240,6 +290,7 @@ class _SchedulePageState extends State<SchedulePage> {
                       item: item,
                       onChanged: (value) =>
                           _toggleTask(item, value ?? false, _selectedDate),
+                      onEdit: () => _editTask(item),
                       onDelete: () => _deleteTask(item),
                     ),
                   )),
@@ -247,6 +298,7 @@ class _SchedulePageState extends State<SchedulePage> {
               key: ValueKey(_selectedDate),
               reviewFuture: _reviewFuture,
               onSave: _saveReview,
+              onDelete: _deleteReview,
             ),
             _GoalsSection(
               periodType: _goalType,
@@ -270,7 +322,8 @@ class _SchedulePageState extends State<SchedulePage> {
     return FutureBuilder<List<List<ScheduleItem>>>(
       future: _weekFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
@@ -290,6 +343,7 @@ class _SchedulePageState extends State<SchedulePage> {
                   items: days[i],
                   onChanged: (item, value) => _toggleTask(
                       item, value, _weekStart.add(Duration(days: i))),
+                  onEdit: _editTask,
                   onDelete: _deleteTask,
                 ),
             ],
@@ -311,26 +365,14 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   Future<void> _deleteTask(ScheduleItem item) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除日程'),
-        content: Text('确认删除“${item.title}”？此操作无法撤销。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirmDelete(
+      title: '删除日程',
+      content: '确认删除“${item.title}”？此操作无法撤销。',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     try {
       await _repository.deleteTask(item.id);
+      await ScheduleNotificationService.instance.cancel(item.id);
       if (mounted) {
         setState(_reload);
         ScaffoldMessenger.of(context)
@@ -340,14 +382,80 @@ class _SchedulePageState extends State<SchedulePage> {
       if (mounted) _showError(error);
     }
   }
+
+  Future<void> _editTask(ScheduleItem item) async {
+    final result = await showDialog<_TaskDraft>(
+      context: context,
+      builder: (_) => _TaskDialog(
+        date: item.startAt,
+        initial: _TaskDraft(
+          title: item.title,
+          note: item.note,
+          startAt: item.startAt,
+          endAt: item.endAt,
+        ),
+      ),
+    );
+    if (result == null) return;
+    try {
+      await _repository.updateTask(
+        eventId: item.id,
+        title: result.title,
+        note: result.note,
+        startAt: result.startAt,
+        endAt: result.endAt,
+      );
+      await ScheduleNotificationService.instance.cancel(item.id);
+      await ScheduleNotificationService.instance.schedule(
+        eventId: item.id,
+        title: result.title,
+        startAt: result.startAt,
+      );
+      if (mounted) {
+        setState(_reload);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('日程已修改。')));
+      }
+    } catch (error) {
+      if (mounted) _showError(error);
+    }
+  }
+
+  Future<bool> _confirmDelete({
+    required String title,
+    required String content,
+  }) async {
+    return (await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(title),
+            content: Text(content),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('删除'),
+              ),
+            ],
+          ),
+        )) ??
+        false;
+  }
 }
 
 class _ScheduleTile extends StatelessWidget {
   const _ScheduleTile(
-      {required this.item, required this.onChanged, required this.onDelete});
+      {required this.item,
+      required this.onChanged,
+      required this.onEdit,
+      required this.onDelete});
 
   final ScheduleItem item;
   final ValueChanged<bool?> onChanged;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   @override
@@ -367,10 +475,20 @@ class _ScheduleTile extends StatelessWidget {
         subtitle:
             Text('$time$endTime${item.note.isEmpty ? '' : '\n${item.note}'}'),
         isThreeLine: item.note.isNotEmpty,
-        trailing: IconButton(
-          tooltip: '删除日程',
-          onPressed: onDelete,
-          icon: const Icon(Icons.delete_outline),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: '编辑日程',
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+            IconButton(
+              tooltip: '删除日程',
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline),
+            ),
+          ],
         ),
       ),
     );
@@ -382,11 +500,13 @@ class _WeekDayColumn extends StatelessWidget {
       {required this.date,
       required this.items,
       required this.onChanged,
+      required this.onEdit,
       required this.onDelete});
 
   final DateTime date;
   final List<ScheduleItem> items;
   final void Function(ScheduleItem item, bool completed) onChanged;
+  final ValueChanged<ScheduleItem> onEdit;
   final ValueChanged<ScheduleItem> onDelete;
 
   @override
@@ -420,10 +540,20 @@ class _WeekDayColumn extends StatelessWidget {
                       subtitle: Text(DateFormat('HH:mm').format(item.startAt)),
                       onChanged: (value) => onChanged(item, value ?? false),
                       controlAffinity: ListTileControlAffinity.leading,
-                      secondary: IconButton(
-                        tooltip: '删除日程',
-                        onPressed: () => onDelete(item),
-                        icon: const Icon(Icons.delete_outline),
+                      secondary: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: '编辑日程',
+                            onPressed: () => onEdit(item),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            tooltip: '删除日程',
+                            onPressed: () => onDelete(item),
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
                       ),
                     )),
             ],
@@ -436,10 +566,14 @@ class _WeekDayColumn extends StatelessWidget {
 
 class _DailyReviewEditor extends StatefulWidget {
   const _DailyReviewEditor(
-      {super.key, required this.reviewFuture, required this.onSave});
+      {super.key,
+      required this.reviewFuture,
+      required this.onSave,
+      required this.onDelete});
 
   final Future<String?> reviewFuture;
   final Future<void> Function(String summary) onSave;
+  final Future<bool> Function() onDelete;
 
   @override
   State<_DailyReviewEditor> createState() => _DailyReviewEditorState();
@@ -465,12 +599,23 @@ class _DailyReviewEditorState extends State<_DailyReviewEditor> {
     }
   }
 
+  Future<void> _delete() async {
+    setState(() => _saving = true);
+    try {
+      final deleted = await widget.onDelete();
+      if (mounted && deleted) _controller.clear();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<String?>(
       future: widget.reviewFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Card(
               child: Padding(
                   padding: EdgeInsets.all(16),
@@ -497,13 +642,22 @@ class _DailyReviewEditorState extends State<_DailyReviewEditor> {
                       border: OutlineInputBorder()),
                 ),
                 const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton.icon(
-                    onPressed: _saving ? null : _save,
-                    icon: const Icon(Icons.save_outlined),
-                    label: Text(_saving ? '保存中…' : '保存总结'),
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (snapshot.data != null)
+                      IconButton(
+                        tooltip: '删除每日总结',
+                        onPressed: _saving ? null : _delete,
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      icon: const Icon(Icons.save_outlined),
+                      label: Text(_saving ? '保存中…' : '保存总结'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -539,10 +693,85 @@ class _GoalsSection extends StatelessWidget {
           startDate: draft.startDate,
           endDate: draft.endDate);
       onReload();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('目标已添加。')));
+      }
     } catch (error) {
       if (context.mounted)
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(toChineseError(error, fallback: '目标保存失败，请稍后重试。'))));
+    }
+  }
+
+  Future<void> _editGoal(BuildContext context, PeriodGoal goal) async {
+    final draft = await showDialog<_GoalDraft>(
+      context: context,
+      builder: (_) => _GoalDialog(periodType: periodType, initial: goal),
+    );
+    if (draft == null) return;
+    try {
+      await repository.updateGoal(
+        goalId: goal.id,
+        title: draft.title,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+      );
+      onReload();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('目标已修改。')));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(toChineseError(error, fallback: '目标修改失败，请稍后重试。'))));
+      }
+    }
+  }
+
+  Future<void> _deleteGoal(BuildContext context, PeriodGoal goal) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除目标'),
+        content: Text('确认删除“${goal.title}”？此操作无法撤销。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('删除')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await repository.deleteGoal(goal.id);
+      onReload();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('目标已删除。')));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(toChineseError(error, fallback: '目标删除失败，请稍后重试。'))));
+      }
+    }
+  }
+
+  Future<void> _setGoalCompleted(
+      BuildContext context, PeriodGoal goal, bool completed) async {
+    try {
+      await repository.setGoalCompleted(goalId: goal.id, completed: completed);
+      onReload();
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(toChineseError(error, fallback: '目标状态保存失败，请稍后重试。'))));
+      }
     }
   }
 
@@ -578,7 +807,8 @@ class _GoalsSection extends StatelessWidget {
             FutureBuilder<List<PeriodGoal>>(
               future: goalsFuture,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting)
+                if (snapshot.connectionState == ConnectionState.waiting &&
+                    !snapshot.hasData)
                   return const LinearProgressIndicator();
                 if (snapshot.hasError) return const Text('暂时无法读取周期目标。');
                 final goals = snapshot.data ?? const <PeriodGoal>[];
@@ -592,11 +822,23 @@ class _GoalsSection extends StatelessWidget {
                             title: Text(goal.title),
                             subtitle: Text(
                                 '${DateFormat('MM月dd日').format(goal.startDate)} - ${DateFormat('MM月dd日').format(goal.endDate)}'),
-                            onChanged: (value) async {
-                              await repository.setGoalCompleted(
-                                  goalId: goal.id, completed: value ?? false);
-                              onReload();
-                            },
+                            onChanged: (value) => _setGoalCompleted(
+                                context, goal, value ?? false),
+                            secondary: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: '编辑目标',
+                                  onPressed: () => _editGoal(context, goal),
+                                  icon: const Icon(Icons.edit_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: '删除目标',
+                                  onPressed: () => _deleteGoal(context, goal),
+                                  icon: const Icon(Icons.delete_outline),
+                                ),
+                              ],
+                            ),
                           ))
                       .toList(),
                 );
@@ -619,9 +861,10 @@ class _GoalDraft {
 }
 
 class _GoalDialog extends StatefulWidget {
-  const _GoalDialog({required this.periodType});
+  const _GoalDialog({required this.periodType, this.initial});
 
   final String periodType;
+  final PeriodGoal? initial;
 
   @override
   State<_GoalDialog> createState() => _GoalDialogState();
@@ -629,6 +872,24 @@ class _GoalDialog extends StatefulWidget {
 
 class _GoalDialogState extends State<_GoalDialog> {
   final _controller = TextEditingController();
+  late DateTime _startDate;
+  late DateTime _endDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.text = widget.initial?.title ?? '';
+    final now = DateTime.now();
+    final defaultStart = widget.periodType == 'week'
+        ? DateTime(now.year, now.month, now.day)
+            .subtract(Duration(days: now.weekday - DateTime.monday))
+        : DateTime(now.year, now.month, 1);
+    _startDate = widget.initial?.startDate ?? defaultStart;
+    _endDate = widget.initial?.endDate ??
+        (widget.periodType == 'week'
+            ? defaultStart.add(const Duration(days: 6))
+            : DateTime(now.year, now.month + 1, 0));
+  }
 
   @override
   void dispose() {
@@ -639,26 +900,67 @@ class _GoalDialogState extends State<_GoalDialog> {
   void _save() {
     final title = _controller.text.trim();
     if (title.isEmpty) return;
-    final now = DateTime.now();
-    final start = widget.periodType == 'week'
-        ? DateTime(now.year, now.month, now.day)
-            .subtract(Duration(days: now.weekday - DateTime.monday))
-        : DateTime(now.year, now.month, 1);
-    final end = widget.periodType == 'week'
-        ? start.add(const Duration(days: 6))
-        : DateTime(now.year, now.month + 1, 0);
-    Navigator.pop(
-        context, _GoalDraft(title: title, startDate: start, endDate: end));
+    if (_endDate.isBefore(_startDate)) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('结束日期不能早于开始日期。')));
+      return;
+    }
+    Navigator.pop(context,
+        _GoalDraft(title: title, startDate: _startDate, endDate: _endDate));
+  }
+
+  Future<void> _pickDate({required bool isStart}) async {
+    final selected = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      initialDate: isStart ? _startDate : _endDate,
+    );
+    if (selected == null) return;
+    setState(() {
+      if (isStart) {
+        _startDate = selected;
+      } else {
+        _endDate = selected;
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.periodType == 'week' ? '添加本周目标' : '添加本月目标'),
-      content: TextField(
-          controller: _controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: '目标内容')),
+      title: Text(widget.initial == null
+          ? (widget.periodType == 'week' ? '添加本周目标' : '添加本月目标')
+          : '编辑目标'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+                controller: _controller,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: '目标内容')),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => _pickDate(isStart: true),
+                    child: Text('开始 ${DateFormat('MM月dd日').format(_startDate)}'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => _pickDate(isStart: false),
+                    child: Text('结束 ${DateFormat('MM月dd日').format(_endDate)}'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context), child: const Text('取消')),
@@ -709,9 +1011,10 @@ class _TaskDraft {
 }
 
 class _TaskDialog extends StatefulWidget {
-  const _TaskDialog({required this.date});
+  const _TaskDialog({required this.date, this.initial});
 
   final DateTime date;
+  final _TaskDraft? initial;
 
   @override
   State<_TaskDialog> createState() => _TaskDialogState();
@@ -721,8 +1024,22 @@ class _TaskDialogState extends State<_TaskDialog> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _noteController = TextEditingController();
-  TimeOfDay _start = const TimeOfDay(hour: 9, minute: 0);
+  late DateTime _date;
+  late TimeOfDay _start;
   TimeOfDay? _end;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    _date = DateTime(widget.date.year, widget.date.month, widget.date.day);
+    _start = initial == null
+        ? const TimeOfDay(hour: 9, minute: 0)
+        : TimeOfDay.fromDateTime(initial.startAt);
+    _end = initial?.endAt == null ? null : TimeOfDay.fromDateTime(initial!.endAt!);
+    _titleController.text = initial?.title ?? '';
+    _noteController.text = initial?.note ?? '';
+  }
 
   @override
   void dispose() {
@@ -731,8 +1048,20 @@ class _TaskDialogState extends State<_TaskDialog> {
     super.dispose();
   }
 
-  DateTime _combine(TimeOfDay time) => DateTime(widget.date.year,
-      widget.date.month, widget.date.day, time.hour, time.minute);
+  DateTime _combine(TimeOfDay time) => DateTime(
+      _date.year, _date.month, _date.day, time.hour, time.minute);
+
+  Future<void> _pickDate() async {
+    final value = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      initialDate: _date,
+    );
+    if (value != null) {
+      setState(() => _date = value);
+    }
+  }
 
   Future<void> _pickStart() async {
     final value = await showTimePicker(context: context, initialTime: _start);
@@ -764,7 +1093,7 @@ class _TaskDialogState extends State<_TaskDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('添加日程任务'),
+      title: Text(widget.initial == null ? '添加日程任务' : '编辑日程任务'),
       content: Form(
         key: _formKey,
         child: SingleChildScrollView(
@@ -782,6 +1111,15 @@ class _TaskDialogState extends State<_TaskDialog> {
                   controller: _noteController,
                   decoration: const InputDecoration(labelText: '备注（可选）')),
               const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: _pickDate,
+                  icon: const Icon(Icons.calendar_month_outlined),
+                  label: Text(DateFormat('yyyy年MM月dd日').format(_date)),
+                ),
+              ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   Expanded(

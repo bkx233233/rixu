@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../health/presentation/health_page.dart';
+import '../../profile/presentation/profile_page.dart';
 import '../../schedule/presentation/schedule_page.dart';
 
 class HomeShell extends StatefulWidget {
@@ -29,11 +30,11 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: switch (_selectedIndex) {
-        0 => const SchedulePage(),
-        1 => const HealthPage(),
-        _ => const _ProfilePage(),
-      },
+      // 保留三个页面的状态，正常切换不再重新请求整页数据。
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: const [SchedulePage(), HealthPage(), ProfilePage()],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) =>
@@ -51,27 +52,6 @@ class _HomeShellState extends State<HomeShell> {
               icon: Icon(Icons.person_outline),
               selectedIcon: Icon(Icons.person),
               label: '我的'),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfilePage extends StatelessWidget {
-  const _ProfilePage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('我的', style: Theme.of(context).textTheme.headlineMedium),
-          const SizedBox(height: 12),
-          Text(Supabase.instance.client.auth.currentUser?.email ?? ''),
-          const SizedBox(height: 24),
-          const Text('个人资料、身高、目标体重和营养目标将在这里设置。'),
         ],
       ),
     );

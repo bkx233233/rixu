@@ -40,6 +40,13 @@ class PeriodGoal {
   bool get isCompleted => status == 'completed';
 }
 
+class ScheduleReminder {
+  const ScheduleReminder({required this.id, required this.title, required this.startAt});
+  final String id;
+  final String title;
+  final DateTime startAt;
+}
+
 class ScheduleRepository {
   ScheduleRepository(this._client);
 
@@ -91,7 +98,7 @@ class ScheduleRepository {
     return items;
   }
 
-  Future<void> addTask({
+  Future<String> addTask({
     required String title,
     required String note,
     required DateTime startAt,
@@ -114,6 +121,7 @@ class ScheduleRepository {
       'schedule_event_id': result['id'],
       'occurrence_date': _dateOnly(startAt),
     });
+    return result['id'] as String;
   }
 
   Future<void> setCompleted({
@@ -141,6 +149,41 @@ class ScheduleRepository {
         .eq('user_id', _userId);
   }
 
+  Future<List<ScheduleReminder>> loadFutureReminders() async {
+    final rows = List<Map<String, dynamic>>.from(await _client
+        .from('schedule_events')
+        .select('id,title,start_at')
+        .eq('user_id', _userId)
+        .eq('is_active', true)
+        .gte('start_at', DateTime.now().toUtc().toIso8601String())
+        .order('start_at')
+        .limit(100));
+    return rows.map((row) => ScheduleReminder(id: row['id'] as String, title: row['title'] as String, startAt: DateTime.parse(row['start_at'] as String).toLocal())).toList();
+  }
+
+  Future<void> updateTask({
+    required String eventId,
+    required String title,
+    required String note,
+    required DateTime startAt,
+    DateTime? endAt,
+  }) async {
+    await _client
+        .from('schedule_events')
+        .update({
+          'title': title,
+          'note': note,
+          'start_at': startAt.toUtc().toIso8601String(),
+          'end_at': endAt?.toUtc().toIso8601String(),
+        })
+        .eq('id', eventId)
+        .eq('user_id', _userId);
+    await _client
+        .from('task_occurrences')
+        .update({'occurrence_date': _dateOnly(startAt)})
+        .eq('schedule_event_id', eventId);
+  }
+
   Future<String?> loadDailyReview(DateTime date) async {
     final row = await _client
         .from('daily_reviews')
@@ -163,6 +206,14 @@ class ScheduleRepository {
       },
       onConflict: 'user_id,review_date',
     );
+  }
+
+  Future<void> deleteDailyReview(DateTime date) async {
+    await _client
+        .from('daily_reviews')
+        .delete()
+        .eq('user_id', _userId)
+        .eq('review_date', _dateOnly(date));
   }
 
   Future<List<PeriodGoal>> loadGoals(String periodType) async {
@@ -214,6 +265,31 @@ class ScheduleRepository {
           'completed_at':
               completed ? DateTime.now().toUtc().toIso8601String() : null,
         })
+        .eq('id', goalId)
+        .eq('user_id', _userId);
+  }
+
+  Future<void> updateGoal({
+    required String goalId,
+    required String title,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    await _client
+        .from('period_goals')
+        .update({
+          'title': title,
+          'start_date': _dateOnly(startDate),
+          'end_date': _dateOnly(endDate),
+        })
+        .eq('id', goalId)
+        .eq('user_id', _userId);
+  }
+
+  Future<void> deleteGoal(String goalId) async {
+    await _client
+        .from('period_goals')
+        .delete()
         .eq('id', goalId)
         .eq('user_id', _userId);
   }

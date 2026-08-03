@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/feedback/user_message.dart';
+import '../../../core/widgets/home_widget_service.dart';
 import '../data/health_repository.dart';
 
 class HealthPage extends StatefulWidget {
@@ -19,6 +20,7 @@ class _HealthPageState extends State<HealthPage> {
   late Future<HealthDayData> _dayFuture;
   late Future<List<WeightPoint>> _weightsFuture;
   late Future<List<FoodItem>> _foodItemsFuture;
+  late Future<NutritionTarget?> _nutritionTargetFuture;
   late final RealtimeChannel _realtimeChannel;
 
   @override
@@ -113,6 +115,13 @@ class _HealthPageState extends State<HealthPage> {
     _dayFuture = _repository.loadDay(_selectedDate);
     _weightsFuture = _repository.loadRecentWeights();
     _foodItemsFuture = _repository.loadFoodItems();
+    _nutritionTargetFuture = _repository.loadNutritionTarget();
+    _dayFuture.then((day) async {
+      if (DateUtils.isSameDay(_selectedDate, DateTime.now())) {
+        await HomeWidgetService.instance
+            .updateNutrition(day, await _nutritionTargetFuture);
+      }
+    });
   }
 
   Future<void> _chooseDate() async {
@@ -167,7 +176,22 @@ class _HealthPageState extends State<HealthPage> {
     );
     if (draft == null) return;
     try {
-      await _repository.addMeal(
+      if (draft.id == null) {
+        await _repository.addMeal(
+          date: _selectedDate,
+          mealType: draft.mealType,
+          foodName: draft.foodName,
+          amount: draft.amount,
+          unit: draft.unit,
+          calories: draft.calories,
+          protein: draft.protein,
+          carbohydrate: draft.carbohydrate,
+          fat: draft.fat,
+          foodItemId: draft.foodItemId,
+        );
+      } else {
+        await _repository.updateMeal(
+          id: draft.id!,
         date: _selectedDate,
         mealType: draft.mealType,
         foodName: draft.foodName,
@@ -179,6 +203,7 @@ class _HealthPageState extends State<HealthPage> {
         fat: draft.fat,
         foodItemId: draft.foodItemId,
       );
+      }
       if (mounted) {
         setState(_reload);
         ScaffoldMessenger.of(context)
@@ -187,6 +212,20 @@ class _HealthPageState extends State<HealthPage> {
     } catch (error) {
       if (mounted) _showError(error);
     }
+  }
+
+  Future<void> _editMeal(MealEntry meal) async {
+    final draft = await showDialog<_MealDraft>(context: context, builder: (_) => _MealDialog(foodItemsFuture: _foodItemsFuture, existing: meal));
+    if (draft == null) return;
+    try {
+      await _repository.updateMeal(id: meal.id, date: _selectedDate, mealType: draft.mealType, foodName: draft.foodName, amount: draft.amount, unit: draft.unit, calories: draft.calories, protein: draft.protein, carbohydrate: draft.carbohydrate, fat: draft.fat, foodItemId: draft.foodItemId);
+      if (mounted) { setState(_reload); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('饮食记录已修改。'))); }
+    } catch (error) { if (mounted) _showError(error); }
+  }
+
+  Future<void> _deleteMeal(MealEntry meal) async {
+    if (!await _confirm('删除饮食记录', '确认删除“${meal.foodName}”吗？')) return;
+    try { await _repository.deleteMeal(meal.id); if (mounted) { setState(_reload); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('饮食记录已删除。'))); } } catch (error) { if (mounted) _showError(error); }
   }
 
   Future<void> _manageFoodItems() async {
@@ -223,6 +262,19 @@ class _HealthPageState extends State<HealthPage> {
       }
     }
   }
+
+  Future<void> _editExercise(WorkoutExercise exercise) async {
+    final draft = await showDialog<_ExerciseDraft>(context: context, builder: (_) => _ExerciseDialog(existing: exercise));
+    if (draft == null) return;
+    try { await _repository.updateExercise(id: exercise.id, name: draft.name, sets: draft.sets, repetitions: draft.repetitions, weight: draft.weight, durationSeconds: draft.durationSeconds); if (mounted) { setState(_reload); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('训练动作已修改。'))); } } catch (error) { if (mounted) _showError(error); }
+  }
+
+  Future<void> _deleteExercise(WorkoutExercise exercise) async {
+    if (!await _confirm('删除训练动作', '确认删除“${exercise.name}”吗？')) return;
+    try { await _repository.deleteExercise(exercise.id); if (mounted) { setState(_reload); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('训练动作已删除。'))); } } catch (error) { if (mounted) _showError(error); }
+  }
+
+  Future<bool> _confirm(String title, String content) async => await showDialog<bool>(context: context, builder: (context) => AlertDialog(title: Text(title), content: Text(content), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('删除'))])) ?? false;
 
   Future<double?> _numberDialog(
       {required String title,
@@ -268,10 +320,11 @@ class _HealthPageState extends State<HealthPage> {
     return FutureBuilder<HealthDayData>(
       future: _dayFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        if (snapshot.hasError) {
+        if (snapshot.hasError && !snapshot.hasData) {
           return Center(
               child: Text(toChineseError(snapshot.error!,
                   fallback: '暂时无法读取健康记录，请稍后重试。')));
@@ -300,6 +353,18 @@ class _HealthPageState extends State<HealthPage> {
                       onPressed: _chooseDate,
                       icon: const Icon(Icons.calendar_month_outlined)),
                 ],
+              ),
+              _SectionCard(
+                title: '今日营养摘要',
+                child: FutureBuilder<NutritionTarget?>(
+                  future: _nutritionTargetFuture,
+                  builder: (context, targetSnapshot) {
+                    final target = targetSnapshot.data;
+                    if (target == null) return const Text('请在“我的”完善资料后生成每日营养目标。');
+                    final intake = NutritionValues(calories: calories, protein: protein, carbohydrate: carbohydrate, fat: fat);
+                    return _NutritionSummary(intake: intake, target: target);
+                  },
+                ),
               ),
               _SectionCard(
                 title: '今日训练状态',
@@ -342,6 +407,7 @@ class _HealthPageState extends State<HealthPage> {
                                   leading: const Icon(Icons.fitness_center),
                                   title: Text(exercise.name),
                                   subtitle: Text(_exerciseSummary(exercise)),
+                                  trailing: PopupMenuButton<String>(onSelected: (action) => action == 'edit' ? _editExercise(exercise) : _deleteExercise(exercise), itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('修改')), PopupMenuItem(value: 'delete', child: Text('删除'))]),
                                 )),
                           const SizedBox(height: 6),
                           FilledButton.tonalIcon(
@@ -387,6 +453,7 @@ class _HealthPageState extends State<HealthPage> {
                                 '${_mealLabel(meal.mealType)} · ${meal.foodName}'),
                             subtitle: Text(
                                 '${meal.amount}${meal.unit} · ${meal.calories.toStringAsFixed(0)} 千卡'),
+                            trailing: PopupMenuButton<String>(onSelected: (action) => action == 'edit' ? _editMeal(meal) : _deleteMeal(meal), itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('修改')), PopupMenuItem(value: 'delete', child: Text('删除'))]),
                           )),
                   ],
                 ),
@@ -466,6 +533,33 @@ class _HealthPageState extends State<HealthPage> {
   }
 }
 
+class _NutritionSummary extends StatelessWidget {
+  const _NutritionSummary({required this.intake, required this.target});
+  final NutritionValues intake;
+  final NutritionTarget target;
+
+  @override
+  Widget build(BuildContext context) {
+    final left = target.calories - intake.calories;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(left >= 0 ? '还可摄入 ${left.toStringAsFixed(0)} 千卡' : '已超出 ${(-left).toStringAsFixed(0)} 千卡', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 8),
+      _MacroProgress(label: '碳水', value: intake.carbohydrate, target: target.carbohydrate, color: Colors.orange),
+      _MacroProgress(label: '蛋白质', value: intake.protein, target: target.protein, color: Colors.teal),
+      _MacroProgress(label: '脂肪', value: intake.fat, target: target.fat, color: Colors.pink),
+      const SizedBox(height: 4),
+      Text('已摄入 ${intake.calories.toStringAsFixed(0)} / ${target.calories.toStringAsFixed(0)} 千卡 · 热量缺口 ${target.deficit} 千卡', style: Theme.of(context).textTheme.bodySmall),
+    ]);
+  }
+}
+
+class _MacroProgress extends StatelessWidget {
+  const _MacroProgress({required this.label, required this.value, required this.target, required this.color});
+  final String label; final double value; final double target; final Color color;
+  @override
+  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(children: [SizedBox(width: 48, child: Text(label)), Expanded(child: LinearProgressIndicator(value: target <= 0 ? 0 : (value / target).clamp(0, 1), color: color)), const SizedBox(width: 8), Text('${value.toStringAsFixed(0)}/${target.toStringAsFixed(0)}g')]));
+}
+
 class _SectionCard extends StatelessWidget {
   const _SectionCard({required this.title, required this.child, this.trailing});
 
@@ -499,7 +593,8 @@ class _SectionCard extends StatelessWidget {
 
 class _MealDraft {
   const _MealDraft(
-      {required this.mealType,
+      {this.id,
+      required this.mealType,
       required this.foodName,
       required this.amount,
       required this.unit,
@@ -509,6 +604,7 @@ class _MealDraft {
       required this.fat,
       this.foodItemId});
 
+  final String? id;
   final String mealType;
   final String foodName;
   final double amount;
@@ -536,7 +632,8 @@ class _ExerciseDraft {
 }
 
 class _ExerciseDialog extends StatefulWidget {
-  const _ExerciseDialog();
+  const _ExerciseDialog({this.existing});
+  final WorkoutExercise? existing;
 
   @override
   State<_ExerciseDialog> createState() => _ExerciseDialogState();
@@ -574,6 +671,19 @@ class _ExerciseDialogState extends State<_ExerciseDialog> {
   String _selectedBodyPart = '胸';
   String? _selectedAction;
   ({int sets, int repetitions})? _selectedSetRep;
+
+  @override
+  void initState() {
+    super.initState();
+    final item = widget.existing;
+    if (item != null) {
+      _nameController.text = item.name;
+      _setsController.text = item.sets?.toString() ?? '';
+      _repetitionsController.text = item.repetitions?.toString() ?? '';
+      _weightController.text = item.weight?.toString() ?? '';
+      _durationController.text = item.durationSeconds?.toString() ?? '';
+    }
+  }
 
   @override
   void dispose() {
@@ -728,9 +838,10 @@ class _ExerciseDialogState extends State<_ExerciseDialog> {
 }
 
 class _MealDialog extends StatefulWidget {
-  const _MealDialog({required this.foodItemsFuture});
+  const _MealDialog({required this.foodItemsFuture, this.existing});
 
   final Future<List<FoodItem>> foodItemsFuture;
+  final MealEntry? existing;
 
   @override
   State<_MealDialog> createState() => _MealDialogState();
@@ -747,6 +858,22 @@ class _MealDialogState extends State<_MealDialog> {
   final _fatController = TextEditingController(text: '0');
   String _mealType = 'breakfast';
   FoodItem? _selectedFood;
+
+  @override
+  void initState() {
+    super.initState();
+    final meal = widget.existing;
+    if (meal != null) {
+      _mealType = meal.mealType;
+      _foodController.text = meal.foodName;
+      _amountController.text = meal.amount.toString();
+      _unitController.text = meal.unit;
+      _calorieController.text = meal.calories.toString();
+      _proteinController.text = meal.protein.toString();
+      _carbohydrateController.text = meal.carbohydrate.toString();
+      _fatController.text = meal.fat.toString();
+    }
+  }
 
   @override
   void dispose() {
@@ -775,21 +902,24 @@ class _MealDialogState extends State<_MealDialog> {
 
   void _selectFood(FoodItem? food) {
     setState(() {
+      if (food != null && !food.isUsable) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('这个食物缺少每 100 克营养数据，请先在常用食物中补充。')));
+        return;
+      }
       _selectedFood = food;
-      if (food != null) _applyFood(food, food.defaultAmount);
+      if (food != null) _applyFood(food, 100);
     });
   }
 
   void _applyFood(FoodItem food, double amount) {
-    final ratio = amount / food.defaultAmount;
+    final values = food.calculate(amount);
     _foodController.text = food.name;
     _amountController.text = amount.toStringAsFixed(1);
-    _unitController.text = food.defaultUnit;
-    _calorieController.text = (food.calories * ratio).toStringAsFixed(1);
-    _proteinController.text = (food.protein * ratio).toStringAsFixed(1);
-    _carbohydrateController.text =
-        (food.carbohydrate * ratio).toStringAsFixed(1);
-    _fatController.text = (food.fat * ratio).toStringAsFixed(1);
+    _unitController.text = 'g';
+    _calorieController.text = values.calories.toStringAsFixed(1);
+    _proteinController.text = values.protein.toStringAsFixed(1);
+    _carbohydrateController.text = values.carbohydrate.toStringAsFixed(1);
+    _fatController.text = values.fat.toStringAsFixed(1);
   }
 
   void _save() {
@@ -806,6 +936,7 @@ class _MealDialogState extends State<_MealDialog> {
     Navigator.pop(
         context,
         _MealDraft(
+            id: widget.existing?.id,
             mealType: _mealType,
             foodName: _foodController.text.trim(),
             amount: values[0]!,
@@ -814,7 +945,7 @@ class _MealDialogState extends State<_MealDialog> {
             protein: values[2]!,
             carbohydrate: values[3]!,
             fat: values[4]!,
-            foodItemId: _selectedFood?.id));
+            foodItemId: _selectedFood?.isSystem == true ? null : _selectedFood?.id));
   }
 
   @override
@@ -988,6 +1119,7 @@ class _FoodLibraryDialogState extends State<_FoodLibraryDialog> {
     if (draft == null) return;
     try {
       await widget.repository.saveFoodItem(
+        id: draft.id,
         name: draft.name,
         category: draft.category,
         defaultAmount: draft.defaultAmount,
@@ -1011,6 +1143,15 @@ class _FoodLibraryDialogState extends State<_FoodLibraryDialog> {
         );
       }
     }
+  }
+
+  Future<void> _editFoodItem(FoodItem food) async {
+    final draft = await showDialog<_FoodItemDraft>(context: context, builder: (_) => _FoodItemEditor(existing: food));
+    if (draft == null) return;
+    try {
+      await widget.repository.saveFoodItem(id: draft.id, name: draft.name, category: draft.category, defaultAmount: draft.defaultAmount, defaultUnit: draft.defaultUnit, calories: draft.calories, protein: draft.protein, carbohydrate: draft.carbohydrate, fat: draft.fat);
+      if (mounted) { setState(_reload); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('常用食物已修改。'))); }
+    } catch (error) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(toChineseError(error, fallback: '常用食物修改失败，请稍后重试。')))); }
   }
 
   Future<void> _deleteFoodItem(FoodItem food) async {
@@ -1086,11 +1227,7 @@ class _FoodLibraryDialogState extends State<_FoodLibraryDialog> {
                   subtitle: Text(
                     '${food.category} · ${food.defaultAmount.toStringAsFixed(1)}${food.defaultUnit} · ${food.calories.toStringAsFixed(0)} 千卡',
                   ),
-                  trailing: IconButton(
-                    tooltip: '删除常用食物',
-                    onPressed: () => _deleteFoodItem(food),
-                    icon: const Icon(Icons.delete_outline),
-                  ),
+                  trailing: food.isSystem ? const Text('系统食物') : PopupMenuButton<String>(onSelected: (value) => value == 'edit' ? _editFoodItem(food) : _deleteFoodItem(food), itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('修改')), PopupMenuItem(value: 'delete', child: Text('删除'))]),
                 );
               },
             );
@@ -1114,6 +1251,7 @@ class _FoodLibraryDialogState extends State<_FoodLibraryDialog> {
 
 class _FoodItemDraft {
   const _FoodItemDraft({
+    this.id,
     required this.name,
     required this.category,
     required this.defaultAmount,
@@ -1124,6 +1262,7 @@ class _FoodItemDraft {
     required this.fat,
   });
 
+  final String? id;
   final String name;
   final String category;
   final double defaultAmount;
@@ -1135,7 +1274,8 @@ class _FoodItemDraft {
 }
 
 class _FoodItemEditor extends StatefulWidget {
-  const _FoodItemEditor();
+  const _FoodItemEditor({this.existing});
+  final FoodItem? existing;
 
   @override
   State<_FoodItemEditor> createState() => _FoodItemEditorState();
@@ -1151,6 +1291,20 @@ class _FoodItemEditorState extends State<_FoodItemEditor> {
   final _carbohydrateController = TextEditingController(text: '0');
   final _fatController = TextEditingController(text: '0');
   String _category = '其他';
+
+  @override
+  void initState() {
+    super.initState();
+    final food = widget.existing;
+    if (food != null) {
+      _nameController.text = food.name;
+      _category = food.category;
+      _calorieController.text = food.calories.toString();
+      _proteinController.text = food.protein.toString();
+      _carbohydrateController.text = food.carbohydrate.toString();
+      _fatController.text = food.fat.toString();
+    }
+  }
 
   @override
   void dispose() {
@@ -1184,6 +1338,7 @@ class _FoodItemEditorState extends State<_FoodItemEditor> {
     Navigator.pop(
       context,
       _FoodItemDraft(
+        id: widget.existing?.id,
         name: _nameController.text.trim(),
         category: _category,
         defaultAmount: _number(_amountController)!,
@@ -1231,7 +1386,8 @@ class _FoodItemEditorState extends State<_FoodItemEditor> {
                   Expanded(
                     child: TextFormField(
                       controller: _amountController,
-                      decoration: const InputDecoration(labelText: '基准份量'),
+                      decoration: const InputDecoration(labelText: '固定为每 100 克'),
+                      enabled: false,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
                       validator: (value) =>
@@ -1242,7 +1398,8 @@ class _FoodItemEditorState extends State<_FoodItemEditor> {
                   Expanded(
                     child: TextFormField(
                       controller: _unitController,
-                      decoration: const InputDecoration(labelText: '单位'),
+                      decoration: const InputDecoration(labelText: '固定为 g'),
+                      enabled: false,
                       validator: (value) =>
                           value == null || value.trim().isEmpty
                               ? '请输入单位。'
@@ -1253,7 +1410,7 @@ class _FoodItemEditorState extends State<_FoodItemEditor> {
               ),
               TextFormField(
                 controller: _calorieController,
-                decoration: const InputDecoration(labelText: '热量（千卡）'),
+                decoration: const InputDecoration(labelText: '每 100 克热量（千卡）'),
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 validator: _numberValidator,

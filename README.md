@@ -31,7 +31,7 @@ flutter build apk --release --dart-define=SUPABASE_URL=你的项目地址 --dart
 supabase db push
 ```
 
-如果通过 Supabase 网页控制台管理数据库，在 SQL Editor 按文件名顺序执行 `supabase/migrations` 中尚未执行的迁移。当前新增的 `202608020003_food_items.sql` 会建立“我的常用食物”并为饮食记录增加食物引用。
+如果通过 Supabase 网页控制台管理数据库，在 SQL Editor 按文件名顺序执行 `supabase/migrations` 中尚未执行的迁移。`202608020003_food_items.sql` 会建立“我的常用食物”并为饮食记录增加食物引用；`202608020005_health_v2.sql` 会将食物营养统一为每 100 克基准，并加入营养资料和每日目标字段。历史饮食记录不会被改写。
 
 ## 网页正式发布
 
@@ -48,6 +48,12 @@ supabase db push
 
 Netlify 只托管 Flutter 生成的静态网页，账号和业务数据仍然保存在 Supabase。
 
+## Android 提醒与小组件
+
+- 日程到点使用系统精确闹钟，提供响铃、震动、关闭和 5 分钟后提醒。
+- 首次使用需要允许通知、精确闹钟和全屏提醒；部分手机还需要在系统设置中允许后台运行。
+- 小尺寸日程组件显示下一项待办，中/大尺寸显示当天全部日程列表；营养组件显示热量和三大营养素进度。
+
 ## 测试
 
 ```powershell
@@ -59,9 +65,12 @@ flutter analyze
 
 第一版只支持用户手动录入、常用食物和最近记录，避免使用无法核验的营养数据。
 
+系统食物表保存来源、版本和原始引用字段，只允许导入可追溯的公开数据；品牌食品仍由用户按包装营养成分表创建。
+
 ## 待办
 
 - 在 Supabase SQL Editor 执行 `supabase/migrations/202608020001_training_status_guard.sql` 和 `supabase/migrations/202608020002_realtime_workout_exercise_logs.sql`。
 - 在 Supabase SQL Editor 执行 `supabase/migrations/202608020003_food_items.sql` 后，再使用常用食物功能。
 - 如果训练状态显示“健身中”但动作仍保存失败，执行 `supabase/migrations/202608020004_fix_training_guard.sql` 覆盖旧的训练保护函数。
+- 在 Supabase SQL Editor 执行 `supabase/migrations/202608020005_health_v2.sql` 后再使用 0.2 的食物库、资料完善和营养目标功能。
 - 完成真实云端同步、网页发布与 APK 签名打包验证。
