@@ -297,6 +297,19 @@ class HealthRepository {
         .eq('user_id', _userId)
         .gte('local_date', _dateOnly(cutoff))
         .order('local_date'));
+    return _weightPointsFromRows(rows);
+  }
+
+  Future<List<WeightPoint>> loadAllWeights() async {
+    final rows = List<Map<String, dynamic>>.from(await _client
+        .from('body_weight_entries')
+        .select('local_date,weight_kg,created_at')
+        .eq('user_id', _userId)
+        .order('local_date'));
+    return _weightPointsFromRows(rows);
+  }
+
+  List<WeightPoint> _weightPointsFromRows(List<Map<String, dynamic>> rows) {
     final points = rows
         .map((row) => WeightPoint(
               date: DateTime.parse(row['local_date'] as String),

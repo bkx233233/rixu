@@ -19,6 +19,7 @@ class _ProfilePageState extends State<ProfilePage> {
   late Future<NutritionTarget?> _targetFuture;
   late Future<_ProfileViewData> _pageFuture;
   late final RealtimeChannel _realtimeChannel;
+  WeightPoint? _selectedWeight;
 
   @override
   void initState() {
@@ -178,6 +179,27 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _openAllWeights() async {
+    try {
+      final points = await _repository.loadAllWeights();
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => _AllWeightsSheet(
+          points: points,
+          onDelete: _deleteWeight,
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('读取全部体重记录失败，请稍后重试。')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<_ProfileViewData>(
@@ -195,6 +217,17 @@ class _ProfilePageState extends State<ProfilePage> {
         final weights = viewData.weights;
         final profile = viewData.profile;
         final target = viewData.target;
+        WeightPoint? selected;
+        if (weights.isNotEmpty) {
+          selected = weights.last;
+          for (final point in weights) {
+            if (_selectedWeight != null &&
+                DateUtils.isSameDay(point.date, _selectedWeight!.date)) {
+              selected = point;
+              break;
+            }
+          }
+        }
         return ListView(padding: const EdgeInsets.all(20), children: [
           if (snapshot.connectionState == ConnectionState.waiting)
             const LinearProgressIndicator(),
@@ -242,24 +275,22 @@ class _ProfilePageState extends State<ProfilePage> {
                     _reload();
                   })),
           const SizedBox(height: 12),
-          _WeightChart(points: weights),
+          if (selected != null) _SelectedWeightSummary(point: selected),
           const SizedBox(height: 8),
-          if (weights.isEmpty)
-            const Center(
-                child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('这个时间范围还没有真实体重记录。'))),
-          for (final point in weights.reversed)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.monitor_weight_outlined),
-              title: Text('${point.weight.toStringAsFixed(1)} kg'),
-              subtitle: Text(_weightRecordLabel(point)),
-              trailing: IconButton(
-                  tooltip: '删除记录',
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => _deleteWeight(point)),
+          _WeightChart(
+            points: weights,
+            selectedPoint: selected,
+            onPointSelected: (point) => setState(() => _selectedWeight = point),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _openAllWeights,
+              icon: const Icon(Icons.list_alt_outlined),
+              label: const Text('全部体重'),
             ),
+          ),
         ]);
       },
     );
@@ -279,9 +310,15 @@ class _ProfileViewData {
 }
 
 class _WeightChart extends StatelessWidget {
-  const _WeightChart({required this.points});
+  const _WeightChart({
+    required this.points,
+    required this.selectedPoint,
+    required this.onPointSelected,
+  });
 
   final List<WeightPoint> points;
+  final WeightPoint? selectedPoint;
+  final ValueChanged<WeightPoint> onPointSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -296,6 +333,10 @@ class _WeightChart extends StatelessWidget {
     final minY = ((min - tick) / tick).floorToDouble() * tick;
     final maxY = ((max + tick) / tick).ceilToDouble() * tick;
     final lineColor = Theme.of(context).colorScheme.primary;
+    final selectedIndex = selectedPoint == null
+        ? -1
+        : sortedPoints.indexWhere(
+            (point) => DateUtils.isSameDay(point.date, selectedPoint!.date));
 
     return Container(
       height: 280,
@@ -313,27 +354,17 @@ class _WeightChart extends StatelessWidget {
               ? 1
               : (sortedPoints.length - 1).toDouble(),
           lineTouchData: LineTouchData(
-            handleBuiltInTouches: true,
-            touchTooltipData: LineTouchTooltipData(
-              fitInsideHorizontally: true,
-              fitInsideVertically: true,
-              getTooltipColor: (_) =>
-                  Theme.of(context).colorScheme.inverseSurface,
-              getTooltipItems: (touchedSpots) => touchedSpots.map((spot) {
-                final index = spot.spotIndex;
-                final point = sortedPoints[index];
-                final time = point.recordedAt == null
-                    ? '时间未知'
-                    : DateFormat('HH:mm').format(point.recordedAt!);
-                return LineTooltipItem(
-                  '${DateFormat('yyyy年MM月dd日').format(point.date)}\n$time\n${point.weight.toStringAsFixed(1)} kg',
-                  TextStyle(
-                      color: Theme.of(context).colorScheme.onInverseSurface,
-                      fontWeight: FontWeight.w600,
-                      height: 1.35),
-                );
-              }).toList(),
-            ),
+            touchSpotThreshold: double.infinity,
+            handleBuiltInTouches: false,
+            touchCallback: (event, response) {
+              if (event is! FlTapDownEvent && event is! FlTapUpEvent) return;
+              final spots = response?.lineBarSpots;
+              if (spots == null || spots.isEmpty) return;
+              final index = spots.first.spotIndex;
+              if (index >= 0 && index < sortedPoints.length) {
+                onPointSelected(sortedPoints[index]);
+              }
+            },
           ),
           lineBarsData: [
             LineChartBarData(
@@ -341,7 +372,11 @@ class _WeightChart extends StatelessWidget {
                 for (var index = 0; index < sortedPoints.length; index++)
                   FlSpot(index.toDouble(), sortedPoints[index].weight)
               ],
-              isCurved: false,
+              isCurved: true,
+              curveSmoothness: .28,
+              preventCurveOverShooting: true,
+              isStrokeCapRound: true,
+              isStrokeJoinRound: true,
               color: lineColor,
               barWidth: 3,
               dotData: const FlDotData(show: true),
@@ -394,6 +429,17 @@ class _WeightChart extends StatelessWidget {
                   color: Theme.of(context).dividerColor.withOpacity(.35),
                   strokeWidth: 1)),
           borderData: FlBorderData(show: false),
+          extraLinesData: ExtraLinesData(
+            verticalLines: selectedIndex < 0
+                ? const []
+                : [
+                    VerticalLine(
+                      x: selectedIndex.toDouble(),
+                      color: Theme.of(context).dividerColor.withOpacity(.6),
+                      strokeWidth: 1,
+                    )
+                  ],
+          ),
         ),
       ),
     );
@@ -404,6 +450,114 @@ class _WeightChart extends StatelessWidget {
     if (range <= 2) return .5;
     if (range <= 5) return 1;
     return 2;
+  }
+}
+
+class _SelectedWeightSummary extends StatelessWidget {
+  const _SelectedWeightSummary({required this.point});
+
+  final WeightPoint point;
+
+  @override
+  Widget build(BuildContext context) {
+    final time = point.recordedAt == null
+        ? '时间未知'
+        : DateFormat('yyyy年MM月dd日 HH:mm').format(point.recordedAt!);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('体重', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 2),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text(point.weight.toStringAsFixed(1),
+              style: Theme.of(context)
+                  .textTheme
+                  .displaySmall
+                  ?.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(width: 6),
+          Text('kg', style: Theme.of(context).textTheme.titleMedium),
+        ],
+      ),
+      Text(time, style: Theme.of(context).textTheme.bodySmall),
+    ]);
+  }
+}
+
+class _AllWeightsSheet extends StatefulWidget {
+  const _AllWeightsSheet({required this.points, required this.onDelete});
+
+  final List<WeightPoint> points;
+  final Future<void> Function(WeightPoint point) onDelete;
+
+  @override
+  State<_AllWeightsSheet> createState() => _AllWeightsSheetState();
+}
+
+class _AllWeightsSheetState extends State<_AllWeightsSheet> {
+  late final List<WeightPoint> _points;
+
+  @override
+  void initState() {
+    super.initState();
+    _points = [...widget.points]..sort((a, b) => b.date.compareTo(a.date));
+  }
+
+  Future<void> _delete(WeightPoint point) async {
+    await widget.onDelete(point);
+    if (mounted) {
+      setState(() => _points
+          .removeWhere((item) => DateUtils.isSameDay(item.date, point.date)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = MediaQuery.sizeOf(context).height * .78;
+    return SafeArea(
+      child: SizedBox(
+        height: height,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Expanded(
+                    child: Text('全部体重',
+                        style: Theme.of(context).textTheme.titleLarge)),
+                Text('${_points.length} 条记录',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ]),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _points.isEmpty
+                    ? const Center(child: Text('还没有体重记录。'))
+                    : ListView.separated(
+                        itemCount: _points.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final point = _points[index];
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.monitor_weight_outlined),
+                            title:
+                                Text('${point.weight.toStringAsFixed(1)} kg'),
+                            subtitle: Text(_weightRecordLabel(point)),
+                            trailing: IconButton(
+                              tooltip: '删除记录',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => _delete(point),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
